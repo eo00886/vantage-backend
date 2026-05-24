@@ -93,7 +93,7 @@ def verify_athlete(request: VerifyRequest):
     vertical_needs = 0 if vertical_confidence >= 90 else (2 if vertical_confidence >= 70 else 3)
     sprint_needs = 0 if sprint_confidence >= 90 else (2 if sprint_confidence >= 70 else 3)
     
-    # Generate mock clip URLs
+    # Generate mock clip URLs (frontend generates actual videos)
     clip_dir = f"/static/clips/athlete_{request.athlete_id}"
     vertical_clip_url = f"{clip_dir}/vertical.mp4" if vertical_needs == 0 else None
     sprint_clip_url = f"{clip_dir}/sprint.mp4" if sprint_needs == 0 else None
@@ -132,7 +132,7 @@ async def upload_video(file: UploadFile = File(...)):
 
 @app.get("/clip/{athlete_id}/{metric_type}")
 def get_clip(athlete_id: int, metric_type: str):
-    """Get clip URL for athlete - returns mock data"""
+    """Get clip URL for athlete - returns mock data (frontend generates actual videos)"""
     clip_path = f"./static/clips/athlete_{athlete_id}/{metric_type}.mp4"
     if os.path.exists(clip_path):
         return {"clip_url": f"/static/clips/athlete_{athlete_id}/{metric_type}.mp4", "exists": True}
