@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY vertical_detector.py .
 
-RUN mkdir -p static/clips static/uploads static/thumbnails
+RUN mkdir -p static/clips static/uploads
 
 EXPOSE 8000
 
