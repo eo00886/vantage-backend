@@ -10,8 +10,7 @@ class AthleticDetector:
     """AI-powered athletic metric detection from Instagram videos"""
     
     RIM_HEIGHT_INCHES = 120  # 10 feet
-    SPRINT_DISTANCE_YARDS = 40
-    SPRINT_DISTANCE_FEET = 120
+    SPRINT_DISTANCE_FEET = 120  # 40 yards = 120 feet
     
     def __init__(self):
         pass
@@ -201,7 +200,6 @@ class AthleticDetector:
             result['vertical_inches'] = calc_result['vertical_inches']
             result['confidence'] = calc_result['confidence']
             
-            # Adjust confidence if claimed vertical is far off
             if claimed_vertical and result['vertical_inches']:
                 difference = abs(result['vertical_inches'] - claimed_vertical)
                 if difference > 5:
@@ -298,11 +296,8 @@ class AthleticDetector:
             if time_seconds <= 0:
                 return {'sprint_seconds': None, 'confidence': 0, 'error': 'Invalid time measurement'}
             
-            # Calculate speed in feet per second
             feet_per_second = estimated_distance_ft / time_seconds
-            
-            # Calculate 40-yard dash time (40 yards = 120 feet)
-            sprint_seconds = 120 / feet_per_second if feet_per_second > 0 else None
+            sprint_seconds = self.SPRINT_DISTANCE_FEET / feet_per_second if feet_per_second > 0 else None
             
             if sprint_seconds:
                 confidence = min(0.95, 0.6 + (distance_px / 1000))
@@ -315,7 +310,7 @@ class AthleticDetector:
         return {
             'sprint_seconds': None,
             'confidence': 0,
-            'error': 'Could not detect distance reference (court lines or yard markers needed)'
+            'error': 'Could not detect distance reference (court lines needed)'
         }
     
     def analyze_sprint(self, instagram_url: str, claimed_sprint: Optional[float] = None) -> Dict:
