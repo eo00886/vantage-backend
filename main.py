@@ -6,9 +6,9 @@ from typing import Optional
 import uvicorn
 import os
 import uuid
-import random
 import shutil
 from datetime import datetime
+from vertical_detector import AthleticDetector
 
 app = FastAPI(title="VANTAGE Athletic Metrics API", version="1.0.0")
 
@@ -28,6 +28,9 @@ os.makedirs("./static/thumbnails", exist_ok=True)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Initialize detector
+detector = AthleticDetector()
 
 class VerifyRequest(BaseModel):
     video_source: str
@@ -65,52 +68,25 @@ def verify_athlete(request: VerifyRequest):
     if not request.video_source:
         raise HTTPException(status_code=400, detail="Video source is required")
     
-    # Generate realistic mock data based on claims
-    if request.claimed_vertical and 20 <= request.claimed_vertical <= 60:
-        vertical_inches = request.claimed_vertical + (random.random() - 0.5) * 2
-        vertical_inches = round(max(20, min(60, vertical_inches)), 1)
-        vertical_confidence = 85 + int(random.random() * 10)
-    else:
-        vertical_inches = round(random.uniform(28, 48), 1)
-        vertical_confidence = 70 + int(random.random() * 20)
-    
-    if request.claimed_sprint and 3.8 <= request.claimed_sprint <= 5.5:
-        sprint_seconds = request.claimed_sprint + (random.random() - 0.5) * 0.15
-        sprint_seconds = round(max(3.8, min(5.5, sprint_seconds)), 2)
-        sprint_confidence = 85 + int(random.random() * 10)
-    else:
-        sprint_seconds = round(random.uniform(4.2, 5.0), 2)
-        sprint_confidence = 70 + int(random.random() * 20)
-    
-    # Adjust confidence if claimed vs measured differ significantly
-    if request.claimed_vertical and abs(vertical_inches - request.claimed_vertical) > 3:
-        vertical_confidence = max(55, vertical_confidence - 15)
-    
-    if request.claimed_sprint and abs(sprint_seconds - request.claimed_sprint) > 0.2:
-        sprint_confidence = max(55, sprint_confidence - 15)
-    
-    # Determine how many confirmations are needed
-    vertical_needs = 0 if vertical_confidence >= 90 else (2 if vertical_confidence >= 70 else 3)
-    sprint_needs = 0 if sprint_confidence >= 90 else (2 if sprint_confidence >= 70 else 3)
-    
-    # Generate mock clip URLs (frontend generates actual videos)
-    clip_dir = f"/static/clips/athlete_{request.athlete_id}"
-    vertical_clip_url = f"{clip_dir}/vertical.mp4" if vertical_needs == 0 else None
-    sprint_clip_url = f"{clip_dir}/sprint.mp4" if sprint_needs == 0 else None
-    thumbnail_url = f"{clip_dir}/thumbnail.jpg" if vertical_needs == 0 else None
+    result = detector.analyze_athlete(
+        request.video_source,
+        request.athlete_id,
+        request.claimed_vertical,
+        request.claimed_sprint
+    )
     
     return VerifyResponse(
-        success=True,
-        vertical_inches=vertical_inches,
-        sprint_seconds=sprint_seconds,
-        vertical_confidence=vertical_confidence,
-        sprint_confidence=sprint_confidence,
-        vertical_needs_confirmations=vertical_needs,
-        sprint_needs_confirmations=sprint_needs,
-        vertical_clip_url=vertical_clip_url,
-        sprint_clip_url=sprint_clip_url,
-        thumbnail_url=thumbnail_url,
-        error=None
+        success=result['success'],
+        vertical_inches=result.get('vertical_inches'),
+        sprint_seconds=result.get('sprint_seconds'),
+        vertical_confidence=result.get('vertical_confidence', 0),
+        sprint_confidence=result.get('sprint_confidence', 0),
+        vertical_needs_confirmations=result.get('vertical_needs_confirmations', 3),
+        sprint_needs_confirmations=result.get('sprint_needs_confirmations', 3),
+        vertical_clip_url=result.get('vertical_clip_url'),
+        sprint_clip_url=result.get('sprint_clip_url'),
+        thumbnail_url=result.get('thumbnail_url'),
+        error=result.get('error')
     )
 
 @app.post("/upload-video")
