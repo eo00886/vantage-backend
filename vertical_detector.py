@@ -12,9 +12,6 @@ class AthleticDetector:
     RIM_HEIGHT_INCHES = 120  # 10 feet
     SPRINT_DISTANCE_YARDS = 40
     SPRINT_DISTANCE_FEET = 120
-    BASKETBALL_COURT_LENGTH_FT = 94  # Full court
-    BASKETBALL_HALF_COURT_FT = 47
-    FOOTBALL_FIELD_HASH_MARKS_YARDS = 1  # Between hash marks
     
     def __init__(self):
         pass
@@ -47,7 +44,7 @@ class AthleticDetector:
             print(f"Download error: {e}")
             return None
     
-    def extract_frames(self, video_path: str, frame_interval: int = 3) -> list:
+    def extract_frames(self, video_path: str, frame_interval: int = 3) -> tuple:
         """Extract frames from video for analysis"""
         cap = cv2.VideoCapture(video_path)
         frames = []
@@ -90,7 +87,7 @@ class AthleticDetector:
                     confidence = min(0.95, area / 5000)
                     return rim_center_x, rim_center_y, confidence
             return None, None, 0.0
-        except Exception as e:
+        except Exception:
             return None, None, 0.0
     
     def detect_feet(self, frame: np.ndarray) -> Tuple[Optional[int], float]:
@@ -112,7 +109,7 @@ class AthleticDetector:
                 confidence = min(0.9, vertical_projection[feet_y] / 200)
                 return feet_y, confidence
             return None, 0.0
-        except Exception as e:
+        except Exception:
             return None, 0.0
     
     def find_best_vertical_frames(self, frames: list) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], float]:
@@ -173,6 +170,52 @@ class AthleticDetector:
             'error': None
         }
     
+    def analyze_vertical(self, instagram_url: str, claimed_vertical: Optional[float] = None) -> Dict:
+        """Analyze vertical leap from Instagram video"""
+        result = {'success': False, 'vertical_inches': None, 'confidence': 0, 'error': None}
+        
+        video_path = self.download_instagram_video(instagram_url)
+        if not video_path:
+            result['error'] = 'Failed to download Instagram video. Make sure the post is public.'
+            return result
+        
+        try:
+            frames, _ = self.extract_frames(video_path, frame_interval=3)
+            if len(frames) < 5:
+                result['error'] = 'Video too short or could not extract frames'
+                return result
+            
+            takeoff_frame, peak_frame, _ = self.find_best_vertical_frames(frames)
+            
+            if takeoff_frame is None or peak_frame is None:
+                result['error'] = 'Could not detect jump motion. Make sure video shows a clear vertical jump.'
+                return result
+            
+            calc_result = self.calculate_vertical(takeoff_frame, peak_frame)
+            
+            if calc_result.get('error') or calc_result['vertical_inches'] is None:
+                result['error'] = calc_result.get('error', 'Could not calculate vertical leap')
+                return result
+            
+            result['success'] = True
+            result['vertical_inches'] = calc_result['vertical_inches']
+            result['confidence'] = calc_result['confidence']
+            
+            # Adjust confidence if claimed vertical is far off
+            if claimed_vertical and result['vertical_inches']:
+                difference = abs(result['vertical_inches'] - claimed_vertical)
+                if difference > 5:
+                    result['confidence'] = max(55, result['confidence'] - difference * 2)
+            
+            return result
+            
+        except Exception as e:
+            result['error'] = f'Analysis failed: {str(e)}'
+            return result
+        finally:
+            if os.path.exists(video_path):
+                os.unlink(video_path)
+    
     # ============================================
     # SPRINT SPEED DETECTION
     # ============================================
@@ -180,16 +223,12 @@ class AthleticDetector:
     def detect_player_position(self, frame: np.ndarray) -> Tuple[Optional[int], float]:
         """Detect player's horizontal position (x-coordinate) for sprint tracking"""
         try:
-            # Use motion detection or color-based tracking
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             edges = cv2.Canny(gray, 50, 150)
-            
-            # Find vertical strip where player is likely located
             vertical_projection = np.sum(edges, axis=0)
             
-            # Find the peak in horizontal projection (where player is)
             height, width = frame.shape[:2]
-            center_region = width // 4, 3 * width // 4
+            center_region = (width // 4, 3 * width // 4)
             
             best_x = None
             best_strength = 0
@@ -203,34 +242,30 @@ class AthleticDetector:
                 confidence = min(0.9, best_strength / 500)
                 return best_x, confidence
             return None, 0.0
-        except Exception as e:
+        except Exception:
             return None, 0.0
     
-    def estimate_distance_reference(self, frame: np.ndarray) -> Optional[float]:
-        """Estimate distance reference from court markings (basketball court or football field)"""
+    def estimate_distance_reference(self, frames: list) -> Optional[float]:
+        """Estimate distance reference from court markings"""
         try:
-            # Look for court lines or yard markers
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 50, 150)
-            
-            # Detect horizontal lines (court boundaries)
-            lines = cv2.HoughLinesP(edges, 1, np.pi/180, 100, minLineLength=100, maxLineGap=10)
-            
-            if lines is not None:
-                # Count significant horizontal lines
-                horizontal_lines = 0
-                for line in lines:
-                    x1, y1, x2, y2 = line[0]
-                    if abs(y1 - y2) < 10:  # Horizontal line
-                        horizontal_lines += 1
+            for frame in frames[:5]:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                edges = cv2.Canny(gray, 50, 150)
+                lines = cv2.HoughLinesP(edges, 1, np.pi/180, 100, minLineLength=100, maxLineGap=10)
                 
-                # Estimate based on number of court lines visible
-                if horizontal_lines >= 5:
-                    return self.BASKETBALL_COURT_LENGTH_FT  # Full court
-                elif horizontal_lines >= 3:
-                    return self.BASKETBALL_HALF_COURT_FT  # Half court
+                if lines is not None:
+                    horizontal_lines = 0
+                    for line in lines:
+                        x1, y1, x2, y2 = line[0]
+                        if abs(y1 - y2) < 10:
+                            horizontal_lines += 1
+                    
+                    if horizontal_lines >= 5:
+                        return 94  # Full basketball court (feet)
+                    elif horizontal_lines >= 3:
+                        return 47  # Half basketball court (feet)
             return None
-        except Exception as e:
+        except Exception:
             return None
     
     def calculate_sprint(self, frames: list, fps: float) -> Dict:
@@ -240,101 +275,48 @@ class AthleticDetector:
         timestamps = []
         
         for i, frame in enumerate(frames):
-            player_x, confidence = self.detect_player_position(frame)
+            player_x, _ = self.detect_player_position(frame)
             if player_x:
                 positions.append(player_x)
-                timestamps.append(i / fps)  # Time in seconds
+                timestamps.append(i / fps)
         
         if len(positions) < 10:
             return {'sprint_seconds': None, 'confidence': 0, 'error': 'Not enough movement detected'}
         
-        # Find start position (first significant movement after standing)
         start_idx = 0
         end_idx = len(positions) - 1
         
-        # Calculate distance traveled in pixels
         start_pos = positions[start_idx]
         end_pos = positions[end_idx]
         distance_px = abs(end_pos - start_pos)
         
-        # Estimate real distance (needs reference point)
-        # For demo, use estimated court length
-        estimated_distance_ft = self.estimate_distance_reference(frames[0])
+        estimated_distance_ft = self.estimate_distance_reference(frames)
         
-        if estimated_distance_ft:
-            # Convert pixels to feet
-            pixels_per_foot = distance_px / estimated_distance_ft if distance_px > 0 else 1
-            actual_distance_ft = self.SPRINT_DISTANCE_FEET
+        if estimated_distance_ft and distance_px > 0:
             time_seconds = timestamps[end_idx] - timestamps[start_idx]
             
             if time_seconds <= 0:
                 return {'sprint_seconds': None, 'confidence': 0, 'error': 'Invalid time measurement'}
             
-            # Adjust for actual distance
-            if distance_px > 0:
-                scale_factor = actual_distance_ft / estimated_distance_ft
-                sprint_seconds = time_seconds * scale_factor
-            else:
-                sprint_seconds = time_seconds
+            # Calculate speed in feet per second
+            feet_per_second = estimated_distance_ft / time_seconds
             
-            confidence = min(0.95, 0.7 + (distance_px / 500))
+            # Calculate 40-yard dash time (40 yards = 120 feet)
+            sprint_seconds = 120 / feet_per_second if feet_per_second > 0 else None
             
-            return {
-                'sprint_seconds': round(sprint_seconds, 2),
-                'confidence': round(confidence * 100),
-                'error': None
-            }
+            if sprint_seconds:
+                confidence = min(0.95, 0.6 + (distance_px / 1000))
+                return {
+                    'sprint_seconds': round(sprint_seconds, 2),
+                    'confidence': round(confidence * 100),
+                    'error': None
+                }
         
-        # Fallback: estimate based on frame count (less accurate)
         return {
             'sprint_seconds': None,
             'confidence': 0,
-            'error': 'Could not detect distance reference (court lines or yard markers)'
+            'error': 'Could not detect distance reference (court lines or yard markers needed)'
         }
-    
-    # ============================================
-    # MAIN ANALYSIS METHODS
-    # ============================================
-    
-    def analyze_vertical(self, instagram_url: str, claimed_vertical: Optional[float] = None) -> Dict:
-        """Analyze vertical leap from Instagram video"""
-        result = {'success': False, 'vertical_inches': None, 'confidence': 0, 'error': None}
-        
-        video_path = self.download_instagram_video(instagram_url)
-        if not video_path:
-            result['error'] = 'Failed to download Instagram video'
-            return result
-        
-        try:
-            frames, _ = self.extract_frames(video_path, frame_interval=3)
-            if len(frames) < 5:
-                result['error'] = 'Video too short'
-                return result
-            
-            takeoff_frame, peak_frame, _ = self.find_best_vertical_frames(frames)
-            
-            if takeoff_frame is None or peak_frame is None:
-                result['error'] = 'Could not detect jump motion'
-                return result
-            
-            calc_result = self.calculate_vertical(takeoff_frame, peak_frame)
-            
-            if calc_result.get('error') or calc_result['vertical_inches'] is None:
-                result['error'] = calc_result.get('error', 'Could not calculate vertical')
-                return result
-            
-            result['success'] = True
-            result['vertical_inches'] = calc_result['vertical_inches']
-            result['confidence'] = calc_result['confidence']
-            
-            return result
-            
-        except Exception as e:
-            result['error'] = f'Analysis failed: {str(e)}'
-            return result
-        finally:
-            if os.path.exists(video_path):
-                os.unlink(video_path)
     
     def analyze_sprint(self, instagram_url: str, claimed_sprint: Optional[float] = None) -> Dict:
         """Analyze 40-yard sprint from Instagram video"""
@@ -342,7 +324,7 @@ class AthleticDetector:
         
         video_path = self.download_instagram_video(instagram_url)
         if not video_path:
-            result['error'] = 'Failed to download Instagram video'
+            result['error'] = 'Failed to download Instagram video. Make sure the post is public.'
             return result
         
         try:
@@ -361,6 +343,11 @@ class AthleticDetector:
             result['sprint_seconds'] = calc_result['sprint_seconds']
             result['confidence'] = calc_result['confidence']
             
+            if claimed_sprint and result['sprint_seconds']:
+                difference = abs(result['sprint_seconds'] - claimed_sprint)
+                if difference > 0.3:
+                    result['confidence'] = max(55, result['confidence'] - difference * 20)
+            
             return result
             
         except Exception as e:
@@ -372,10 +359,7 @@ class AthleticDetector:
     
     def analyze_both(self, instagram_url: str, claimed_vertical: Optional[float] = None, claimed_sprint: Optional[float] = None) -> Dict:
         """Analyze both vertical leap and sprint speed"""
-        vertical_result = self.analyze_vertical(instagram_url, claimed_vertical)
-        sprint_result = self.analyze_sprint(instagram_url, claimed_sprint)
-        
         return {
-            'vertical': vertical_result,
-            'sprint': sprint_result
+            'vertical': self.analyze_vertical(instagram_url, claimed_vertical),
+            'sprint': self.analyze_sprint(instagram_url, claimed_sprint)
         }
