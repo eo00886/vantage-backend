@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 import uvicorn
@@ -16,116 +17,63 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files for clips and thumbnails
+os.makedirs("./static/clips", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 detector = AthleticDetector()
 
-class VerifyVerticalRequest(BaseModel):
-    instagram_url: str
-    claimed_vertical: Optional[float] = None
-
-class VerifySprintRequest(BaseModel):
-    instagram_url: str
-    claimed_sprint: Optional[float] = None
+# In-memory athlete storage (replace with database in production)
+athletes_db = {}
 
 class VerifyBothRequest(BaseModel):
     instagram_url: str
+    athlete_id: int
+    athlete_name: str
+    athlete_school: str
+    athlete_position: str
     claimed_vertical: Optional[float] = None
     claimed_sprint: Optional[float] = None
 
-class VerticalResponse(BaseModel):
+class VerifyResponse(BaseModel):
     success: bool
     vertical_inches: Optional[float]
-    confidence: int
-    error: Optional[str]
-    needs_confirmations: int
-
-class SprintResponse(BaseModel):
-    success: bool
     sprint_seconds: Optional[float]
-    confidence: int
-    error: Optional[str]
-    needs_confirmations: int
-    court_type: Optional[str] = None
-
-class BothResponse(BaseModel):
-    vertical: VerticalResponse
-    sprint: SprintResponse
+    vertical_confidence: int
+    sprint_confidence: int
+    vertical_needs_confirmations: int
+    sprint_needs_confirmations: int
+    vertical_clip_url: Optional[str] = None
+    sprint_clip_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    error: Optional[str] = None
 
 @app.get("/")
 def root():
     return {
-        "message": "VANTAGE Basketball Athletic Metrics API",
+        "message": "VANTAGE Athletic Metrics API",
         "status": "running",
         "version": "1.0.0",
-        "sport": "Basketball Only",
-        "metrics": ["Vertical Leap (inches)", "40-Yard Sprint (seconds)"],
-        "endpoints": [
-            "POST /verify-vertical",
-            "POST /verify-sprint",
-            "POST /verify-both",
-            "GET /health"
-        ]
+        "sport": "Basketball (MVP)",
+        "features": ["Vertical Leap Detection", "40-Yard Sprint Detection", "Video Clip Extraction", "Thumbnail Generation"]
     }
 
-@app.post("/verify-vertical", response_model=VerticalResponse)
-def verify_vertical(request: VerifyVerticalRequest):
-    if not request.instagram_url:
-        raise HTTPException(status_code=400, detail="Instagram URL is required")
-    
-    result = detector.analyze_vertical(request.instagram_url, request.claimed_vertical)
-    
-    if result['success'] and result['vertical_inches']:
-        confidence = result['confidence']
-        if confidence >= 90:
-            needs_confirmations = 0
-        elif confidence >= 70:
-            needs_confirmations = 2
-        else:
-            needs_confirmations = 3
-    else:
-        needs_confirmations = 4
-    
-    return VerticalResponse(
-        success=result['success'],
-        vertical_inches=result['vertical_inches'],
-        confidence=result['confidence'],
-        error=result.get('error'),
-        needs_confirmations=needs_confirmations
-    )
-
-@app.post("/verify-sprint", response_model=SprintResponse)
-def verify_sprint(request: VerifySprintRequest):
-    if not request.instagram_url:
-        raise HTTPException(status_code=400, detail="Instagram URL is required")
-    
-    result = detector.analyze_sprint(request.instagram_url, request.claimed_sprint)
-    
-    if result['success'] and result['sprint_seconds']:
-        confidence = result['confidence']
-        if confidence >= 90:
-            needs_confirmations = 0
-        elif confidence >= 70:
-            needs_confirmations = 2
-        else:
-            needs_confirmations = 3
-    else:
-        needs_confirmations = 4
-    
-    return SprintResponse(
-        success=result['success'],
-        sprint_seconds=result['sprint_seconds'],
-        confidence=result['confidence'],
-        error=result.get('error'),
-        needs_confirmations=needs_confirmations,
-        court_type=result.get('court_type')
-    )
-
-@app.post("/verify-both", response_model=BothResponse)
+@app.post("/verify-both", response_model=VerifyResponse)
 def verify_both(request: VerifyBothRequest):
     if not request.instagram_url:
         raise HTTPException(status_code=400, detail="Instagram URL is required")
     
+    # Store athlete info
+    athletes_db[request.athlete_id] = {
+        'name': request.athlete_name,
+        'school': request.athlete_school,
+        'position': request.athlete_position
+    }
+    
+    # Run analysis
     result = detector.analyze_both(
         request.instagram_url,
+        request.athlete_id,
         request.claimed_vertical,
         request.claimed_sprint
     )
@@ -136,23 +84,29 @@ def verify_both(request: VerifyBothRequest):
     v_needs = 0 if (v['success'] and v['vertical_inches'] and v['confidence'] >= 90) else (2 if (v['success'] and v['vertical_inches'] and v['confidence'] >= 70) else (3 if v['success'] else 4))
     s_needs = 0 if (s['success'] and s['sprint_seconds'] and s['confidence'] >= 90) else (2 if (s['success'] and s['sprint_seconds'] and s['confidence'] >= 70) else (3 if s['success'] else 4))
     
-    return BothResponse(
-        vertical=VerticalResponse(
-            success=v['success'],
-            vertical_inches=v.get('vertical_inches'),
-            confidence=v.get('confidence', 0),
-            error=v.get('error'),
-            needs_confirmations=v_needs
-        ),
-        sprint=SprintResponse(
-            success=s['success'],
-            sprint_seconds=s.get('sprint_seconds'),
-            confidence=s.get('confidence', 0),
-            error=s.get('error'),
-            needs_confirmations=s_needs,
-            court_type=s.get('court_type')
-        )
+    return VerifyResponse(
+        success=v['success'] or s['success'],
+        vertical_inches=v.get('vertical_inches'),
+        sprint_seconds=s.get('sprint_seconds'),
+        vertical_confidence=v.get('confidence', 0),
+        sprint_confidence=s.get('confidence', 0),
+        vertical_needs_confirmations=v_needs,
+        sprint_needs_confirmations=s_needs,
+        vertical_clip_url=v.get('clip_path'),
+        sprint_clip_url=s.get('clip_path'),
+        thumbnail_url=v.get('thumbnail_path'),
+        error=v.get('error') or s.get('error')
     )
+
+@app.get("/athlete/{athlete_id}/clip/{metric_type}")
+def get_athlete_clip(athlete_id: int, metric_type: str):
+    """Return the highlight clip URL for an athlete's metric"""
+    clip_path = f"./static/clips/athlete_{athlete_id}/{metric_type}.mp4"
+    
+    if os.path.exists(clip_path):
+        return {"clip_url": f"/static/clips/athlete_{athlete_id}/{metric_type}.mp4", "exists": True}
+    else:
+        return {"clip_url": None, "exists": False, "message": "Clip not yet generated"}
 
 @app.get("/health")
 def health():
