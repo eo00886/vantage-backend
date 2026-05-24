@@ -22,6 +22,7 @@ app.add_middleware(
 # Create directories
 os.makedirs("./static/clips", exist_ok=True)
 os.makedirs("./static/uploads", exist_ok=True)
+os.makedirs("./static/thumbnails", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 detector = AthleticDetector()
@@ -54,8 +55,6 @@ def root():
         "message": "VANTAGE Athletic Metrics API",
         "status": "running",
         "version": "2.0.0",
-        "sport": "Basketball (MVP)",
-        "supported_platforms": ["Instagram", "YouTube", "TikTok", "Twitter/X", "Direct URL", "File Upload", "Camera Capture"],
         "features": ["Vertical Leap Detection", "40-Yard Sprint Detection", "Video Clip Extraction", "Thumbnail Generation"]
     }
 
@@ -64,31 +63,28 @@ def verify_athlete(request: VerifyRequest):
     if not request.video_source:
         raise HTTPException(status_code=400, detail="Video source is required")
     
-    result = detector.analyze_both(
+    result = detector.analyze_athlete(
         request.video_source,
         request.athlete_id,
         request.claimed_vertical,
         request.claimed_sprint
     )
     
-    v = result['vertical']
-    s = result['sprint']
-    
-    v_needs = 0 if (v['success'] and v['vertical_inches'] and v['confidence'] >= 90) else (2 if (v['success'] and v['vertical_inches'] and v['confidence'] >= 70) else (3 if v['success'] else 4))
-    s_needs = 0 if (s['success'] and s['sprint_seconds'] and s['confidence'] >= 90) else (2 if (s['success'] and s['sprint_seconds'] and s['confidence'] >= 70) else (3 if s['success'] else 4))
+    v_needs = 0 if (result['vertical_inches'] and result['vertical_confidence'] >= 90) else (2 if (result['vertical_inches'] and result['vertical_confidence'] >= 70) else (3 if result['vertical_inches'] else 4))
+    s_needs = 0 if (result['sprint_seconds'] and result['sprint_confidence'] >= 90) else (2 if (result['sprint_seconds'] and result['sprint_confidence'] >= 70) else (3 if result['sprint_seconds'] else 4))
     
     return VerifyResponse(
-        success=v['success'] or s['success'],
-        vertical_inches=v.get('vertical_inches'),
-        sprint_seconds=s.get('sprint_seconds'),
-        vertical_confidence=v.get('confidence', 0),
-        sprint_confidence=s.get('confidence', 0),
+        success=result['success'],
+        vertical_inches=result.get('vertical_inches'),
+        sprint_seconds=result.get('sprint_seconds'),
+        vertical_confidence=result.get('vertical_confidence', 0),
+        sprint_confidence=result.get('sprint_confidence', 0),
         vertical_needs_confirmations=v_needs,
         sprint_needs_confirmations=s_needs,
-        vertical_clip_url=v.get('clip_path'),
-        sprint_clip_url=s.get('clip_path'),
-        thumbnail_url=v.get('thumbnail_path'),
-        error=v.get('error') or s.get('error')
+        vertical_clip_url=result.get('vertical_clip_url'),
+        sprint_clip_url=result.get('sprint_clip_url'),
+        thumbnail_url=result.get('thumbnail_url'),
+        error=result.get('error')
     )
 
 @app.post("/upload-video")
@@ -106,13 +102,21 @@ async def upload_video(file: UploadFile = File(...)):
         
         video_url = f"/static/uploads/{file_id}{file_extension}"
         
-        return {"video_url": video_url, "success": True, "message": "Video uploaded successfully"}
+        return {"video_url": video_url, "success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@app.get("/clip/{athlete_id}/{metric_type}")
+def get_clip(athlete_id: int, metric_type: str):
+    """Get clip URL for athlete"""
+    clip_path = f"./static/clips/athlete_{athlete_id}/{metric_type}.mp4"
+    if os.path.exists(clip_path):
+        return {"clip_url": f"/static/clips/athlete_{athlete_id}/{metric_type}.mp4", "exists": True}
+    return {"clip_url": None, "exists": False}
+
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "2.0.0", "sport": "Basketball"}
+    return {"status": "healthy", "version": "2.0.0"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
