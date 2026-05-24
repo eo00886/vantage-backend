@@ -6,11 +6,12 @@ import tempfile
 import re
 import random
 from typing import Dict, Tuple, Optional
+import subprocess
 
 class AthleticDetector:
-    """AI-powered athletic metric detection for BASKETBALL ONLY"""
+    """AI-powered athletic metric detection for BASKETBALL ONLY with clip extraction"""
     
-    RIM_HEIGHT_INCHES = 120  # 10 feet
+    RIM_HEIGHT_INCHES = 120
     BASKETBALL_FULL_COURT_FT = 94
     BASKETBALL_HALF_COURT_FT = 47
     SPRINT_40YD_FT = 120
@@ -62,7 +63,7 @@ class AthleticDetector:
             frame_count += 1
         
         cap.release()
-        return frames, fps
+        return frames, fps, frame_count
     
     # ============================================
     # VERTICAL LEAP DETECTION
@@ -114,30 +115,32 @@ class AthleticDetector:
         except Exception:
             return None, 0.0
     
-    def find_best_vertical_frames(self, frames: list) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], float]:
-        """Identify takeoff and peak jump frames"""
+    def find_best_vertical_frames(self, frames: list) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], int, int, float]:
+        """Identify takeoff and peak jump frames with indices"""
         feet_positions = []
-        for frame in frames:
+        for i, frame in enumerate(frames):
             feet_y, _ = self.detect_feet(frame)
-            feet_positions.append(feet_y)
+            feet_positions.append((feet_y, i))
         
         lowest = float('inf')
         lowest_idx = None
         highest = -float('inf')
         highest_idx = None
+        lowest_original = None
+        highest_original = None
         
-        for i, pos in enumerate(feet_positions):
+        for pos, idx in feet_positions:
             if pos:
                 if pos < lowest:
                     lowest = pos
-                    lowest_idx = i
+                    lowest_idx = idx
                 if pos > highest:
                     highest = pos
-                    highest_idx = i
+                    highest_idx = idx
         
         if lowest_idx is not None and highest_idx is not None:
-            return frames[lowest_idx], frames[highest_idx], 0.8
-        return None, None, 0
+            return frames[lowest_idx], frames[highest_idx], lowest_idx, highest_idx, 0.8
+        return None, None, 0, 0, 0
     
     def calculate_vertical(self, takeoff_frame: np.ndarray, peak_frame: np.ndarray) -> Dict:
         """Calculate vertical leap from takeoff and peak frames"""
@@ -173,6 +176,69 @@ class AthleticDetector:
         }
     
     # ============================================
+    # VIDEO CLIP EXTRACTION
+    # ============================================
+    
+    def extract_vertical_clip(self, video_path: str, takeoff_frame_idx: int, peak_frame_idx: int, output_path: str, fps: float) -> bool:
+        """Extract a 3-second clip centered on the vertical jump"""
+        try:
+            # Calculate clip boundaries (1.5 seconds before takeoff, 1.5 seconds after peak)
+            start_frame = max(0, takeoff_frame_idx - int(1.5 * fps))
+            end_frame = peak_frame_idx + int(1.5 * fps)
+            start_time = start_frame / fps
+            duration = (end_frame - start_frame) / fps
+            
+            # Use ffmpeg to extract clip
+            cmd = [
+                'ffmpeg', '-i', video_path,
+                '-ss', str(start_time),
+                '-t', str(duration),
+                '-c', 'copy',
+                '-avoid_negative_ts', 'make_zero',
+                output_path
+            ]
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return os.path.exists(output_path)
+        except Exception as e:
+            print(f"Clip extraction error: {e}")
+            return False
+    
+    def extract_sprint_clip(self, video_path: str, start_frame_idx: int, end_frame_idx: int, output_path: str, fps: float) -> bool:
+        """Extract clip of the full sprint"""
+        try:
+            start_time = start_frame_idx / fps
+            duration = (end_frame_idx - start_frame_idx) / fps
+            
+            cmd = [
+                'ffmpeg', '-i', video_path,
+                '-ss', str(start_time),
+                '-t', str(duration),
+                '-c', 'copy',
+                output_path
+            ]
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return os.path.exists(output_path)
+        except Exception as e:
+            print(f"Sprint clip extraction error: {e}")
+            return False
+    
+    def extract_thumbnail(self, video_path: str, frame_idx: int, output_path: str) -> bool:
+        """Extract a thumbnail frame from the video"""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            cap.release()
+            
+            if ret:
+                cv2.imwrite(output_path, frame)
+                return True
+            return False
+        except Exception as e:
+            print(f"Thumbnail extraction error: {e}")
+            return False
+    
+    # ============================================
     # BASKETBALL SPRINT DETECTION
     # ============================================
     
@@ -182,7 +248,6 @@ class AthleticDetector:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             edges = cv2.Canny(gray, 50, 150)
             
-            # Detect horizontal court lines
             lines = cv2.HoughLinesP(edges, 1, np.pi/180, 100, minLineLength=100, maxLineGap=20)
             
             horizontal_lines = 0
@@ -191,12 +256,11 @@ class AthleticDetector:
             if lines is not None:
                 for line in lines:
                     x1, y1, x2, y2 = line[0]
-                    if abs(y1 - y2) < 10:  # Horizontal line (court boundary)
+                    if abs(y1 - y2) < 10:
                         horizontal_lines += 1
-                    elif abs(x1 - x2) < 10:  # Vertical line
+                    elif abs(x1 - x2) < 10:
                         vertical_lines += 1
             
-            # Determine court type
             if horizontal_lines >= 5:
                 court_type = 'full'
                 court_length_ft = self.BASKETBALL_FULL_COURT_FT
@@ -242,57 +306,47 @@ class AthleticDetector:
             return None, 0.0
     
     def calculate_sprint_basketball(self, frames: list, fps: float) -> Dict:
-        """Calculate 40-yard sprint time on basketball court"""
-        
-        # Detect court type from first frame
+        """Calculate 40-yard sprint time on basketball court with frame indices"""
         court_info = self.detect_basketball_court_lines(frames[0])
         
         if not court_info['court_length_ft']:
-            return {
-                'sprint_seconds': None,
-                'confidence': 0,
-                'error': 'Could not detect basketball court markings. Film baseline to baseline or baseline to half-court.'
-            }
+            return {'sprint_seconds': None, 'confidence': 0, 'error': 'Could not detect basketball court markings', 'start_idx': 0, 'end_idx': 0}
         
-        # Track player movement
         positions = []
         timestamps = []
+        position_indices = []
         
         for i, frame in enumerate(frames):
             player_x, conf = self.detect_player_position(frame)
             if player_x:
                 positions.append(player_x)
-                timestamps.append(i / fps)
+                timestamps.append(i / (fps * 3))  # Adjust for frame interval
+                position_indices.append(i)
         
         if len(positions) < 5:
-            return {
-                'sprint_seconds': None,
-                'confidence': 0,
-                'error': 'Not enough movement detected. Ensure player runs across the frame.'
-            }
+            return {'sprint_seconds': None, 'confidence': 0, 'error': 'Not enough movement detected', 'start_idx': 0, 'end_idx': 0}
         
-        # Calculate distance traveled in pixels
-        start_pos = positions[0]
-        end_pos = positions[-1]
+        start_idx = 0
+        end_idx = len(positions) - 1
+        start_frame = position_indices[start_idx] * 3
+        end_frame = position_indices[end_idx] * 3
+        
+        start_pos = positions[start_idx]
+        end_pos = positions[end_idx]
         distance_px = abs(end_pos - start_pos)
-        
-        # Calculate time
-        time_seconds = timestamps[-1] - timestamps[0]
+        time_seconds = timestamps[end_idx] - timestamps[start_idx]
         
         if time_seconds <= 0:
-            return {'sprint_seconds': None, 'confidence': 0, 'error': 'Invalid time measurement'}
+            return {'sprint_seconds': None, 'confidence': 0, 'error': 'Invalid time measurement', 'start_idx': 0, 'end_idx': 0}
         
-        # Convert pixels to feet
         frame_width = frames[0].shape[1]
         feet_per_pixel = court_info['court_length_ft'] / frame_width
         distance_ft = distance_px * feet_per_pixel
         
-        # Calculate speed and 40-yard time
         if distance_ft > 0:
             feet_per_second = distance_ft / time_seconds
             sprint_seconds = self.SPRINT_40YD_FT / feet_per_second
             
-            # Calculate confidence based on detection quality
             confidence = min(0.9, 0.5 + (len(positions) / 50) + (court_info['horizontal_lines'] / 20))
             confidence = round(confidence * 100)
             confidence = max(55, min(95, confidence))
@@ -301,15 +355,15 @@ class AthleticDetector:
                 'sprint_seconds': round(sprint_seconds, 2),
                 'confidence': confidence,
                 'court_type': court_info['court_type'],
-                'distance_ft': round(distance_ft, 1),
-                'time_seconds': round(time_seconds, 2),
+                'start_frame': start_frame,
+                'end_frame': end_frame,
                 'error': None
             }
         
-        return {'sprint_seconds': None, 'confidence': 0, 'error': 'Could not calculate sprint distance'}
+        return {'sprint_seconds': None, 'confidence': 0, 'error': 'Could not calculate sprint distance', 'start_idx': 0, 'end_idx': 0}
     
     def calculate_sprint_fallback(self, claimed_sprint: Optional[float], video_url: str) -> Dict:
-        """Fallback when video analysis fails - use claimed time with low confidence"""
+        """Fallback when video analysis fails"""
         quality = 0.6
         if '/reel/' in video_url:
             quality += 0.1
@@ -325,54 +379,66 @@ class AthleticDetector:
         measured = round(max(3.8, min(5.8, measured)), 2)
         
         confidence = int(55 + (quality * 15) + (random.random() * 10))
-        confidence = min(75, confidence)  # Max 75% without visual evidence
+        confidence = min(75, confidence)
         
         return {
             'sprint_seconds': measured,
             'confidence': confidence,
-            'error': None if claimed_sprint else 'Using estimated time. For accurate measurement, film sprint on basketball court.',
-            'is_fallback': True
+            'error': None if claimed_sprint else 'Using estimated time',
+            'is_fallback': True,
+            'start_frame': 0,
+            'end_frame': 0
         }
     
     # ============================================
-    # MAIN ANALYSIS METHODS
+    # MAIN ANALYSIS METHODS WITH CLIP EXTRACTION
     # ============================================
     
-    def analyze_vertical(self, instagram_url: str, claimed_vertical: Optional[float] = None) -> Dict:
-        """Analyze vertical leap from Instagram video"""
-        result = {'success': False, 'vertical_inches': None, 'confidence': 0, 'error': None}
+    def analyze_vertical(self, instagram_url: str, athlete_id: int, claimed_vertical: Optional[float] = None) -> Dict:
+        """Analyze vertical leap and extract clip"""
+        result = {'success': False, 'vertical_inches': None, 'confidence': 0, 'error': None, 'clip_path': None, 'thumbnail_path': None}
         
         video_path = self.download_instagram_video(instagram_url)
         if not video_path:
-            result['error'] = 'Failed to download Instagram video. Make sure the post is public.'
+            result['error'] = 'Failed to download Instagram video'
             return result
         
         try:
-            frames, _ = self.extract_frames(video_path, frame_interval=3)
+            frames, fps, total_frames = self.extract_frames(video_path, frame_interval=3)
             if len(frames) < 5:
-                result['error'] = 'Video too short or could not extract frames'
+                result['error'] = 'Video too short'
                 return result
             
-            takeoff_frame, peak_frame, _ = self.find_best_vertical_frames(frames)
+            takeoff_frame, peak_frame, takeoff_idx, peak_idx, _ = self.find_best_vertical_frames(frames)
             
             if takeoff_frame is None or peak_frame is None:
-                result['error'] = 'Could not detect jump motion. Make sure video shows a clear vertical jump with rim visible.'
+                result['error'] = 'Could not detect jump motion'
                 return result
             
+            # Calculate vertical
             calc_result = self.calculate_vertical(takeoff_frame, peak_frame)
-            
             if calc_result.get('error') or calc_result['vertical_inches'] is None:
-                result['error'] = calc_result.get('error', 'Could not calculate vertical leap')
+                result['error'] = calc_result.get('error', 'Could not calculate vertical')
                 return result
+            
+            # Extract clip
+            clip_dir = f"./static/clips/athlete_{athlete_id}"
+            os.makedirs(clip_dir, exist_ok=True)
+            
+            actual_takeoff_idx = takeoff_idx * 3
+            actual_peak_idx = peak_idx * 3
+            
+            clip_path = f"{clip_dir}/vertical.mp4"
+            thumbnail_path = f"{clip_dir}/vertical_thumb.jpg"
+            
+            self.extract_vertical_clip(video_path, actual_takeoff_idx, actual_peak_idx, clip_path, fps)
+            self.extract_thumbnail(video_path, actual_peak_idx, thumbnail_path)
             
             result['success'] = True
             result['vertical_inches'] = calc_result['vertical_inches']
             result['confidence'] = calc_result['confidence']
-            
-            if claimed_vertical and result['vertical_inches']:
-                difference = abs(result['vertical_inches'] - claimed_vertical)
-                if difference > 5:
-                    result['confidence'] = max(55, result['confidence'] - difference * 2)
+            result['clip_path'] = f"/static/clips/athlete_{athlete_id}/vertical.mp4"
+            result['thumbnail_path'] = f"/static/clips/athlete_{athlete_id}/vertical_thumb.jpg"
             
             return result
             
@@ -383,31 +449,29 @@ class AthleticDetector:
             if os.path.exists(video_path):
                 os.unlink(video_path)
     
-    def analyze_sprint(self, instagram_url: str, claimed_sprint: Optional[float] = None) -> Dict:
-        """Analyze 40-yard sprint from basketball court video"""
-        result = {'success': False, 'sprint_seconds': None, 'confidence': 0, 'error': None}
+    def analyze_sprint(self, instagram_url: str, athlete_id: int, claimed_sprint: Optional[float] = None) -> Dict:
+        """Analyze sprint and extract clip"""
+        result = {'success': False, 'sprint_seconds': None, 'confidence': 0, 'error': None, 'clip_path': None}
         
         video_path = self.download_instagram_video(instagram_url)
         if not video_path:
-            # Fallback to claimed time
             fallback = self.calculate_sprint_fallback(claimed_sprint, instagram_url)
             result['success'] = True
             result['sprint_seconds'] = fallback['sprint_seconds']
             result['confidence'] = fallback['confidence']
-            result['error'] = fallback.get('error', 'Video download failed. Using claimed time with community verification.')
+            result['error'] = fallback.get('error')
             return result
         
         try:
-            frames, fps = self.extract_frames(video_path, frame_interval=2)
+            frames, fps, total_frames = self.extract_frames(video_path, frame_interval=2)
             if len(frames) < 10:
                 fallback = self.calculate_sprint_fallback(claimed_sprint, instagram_url)
                 result['success'] = True
                 result['sprint_seconds'] = fallback['sprint_seconds']
                 result['confidence'] = fallback['confidence']
-                result['error'] = 'Video too short. Using claimed time with community verification.'
+                result['error'] = 'Video too short'
                 return result
             
-            # Try basketball court detection
             calc_result = self.calculate_sprint_basketball(frames, fps)
             
             if calc_result.get('error') or calc_result['sprint_seconds'] is None:
@@ -415,13 +479,21 @@ class AthleticDetector:
                 result['success'] = True
                 result['sprint_seconds'] = fallback['sprint_seconds']
                 result['confidence'] = fallback['confidence']
-                result['error'] = calc_result.get('error', 'Using claimed time with community verification.')
+                result['error'] = calc_result.get('error')
                 return result
+            
+            # Extract clip
+            clip_dir = f"./static/clips/athlete_{athlete_id}"
+            os.makedirs(clip_dir, exist_ok=True)
+            
+            clip_path = f"{clip_dir}/sprint.mp4"
+            self.extract_sprint_clip(video_path, calc_result.get('start_frame', 0), calc_result.get('end_frame', 0), clip_path, fps)
             
             result['success'] = True
             result['sprint_seconds'] = calc_result['sprint_seconds']
             result['confidence'] = calc_result['confidence']
             result['court_type'] = calc_result.get('court_type')
+            result['clip_path'] = f"/static/clips/athlete_{athlete_id}/sprint.mp4"
             
             return result
             
@@ -430,15 +502,15 @@ class AthleticDetector:
             result['success'] = True
             result['sprint_seconds'] = fallback['sprint_seconds']
             result['confidence'] = fallback['confidence']
-            result['error'] = f'Analysis error: {str(e)}. Using claimed time.'
+            result['error'] = f'Analysis error: {str(e)}'
             return result
         finally:
             if os.path.exists(video_path):
                 os.unlink(video_path)
     
-    def analyze_both(self, instagram_url: str, claimed_vertical: Optional[float] = None, claimed_sprint: Optional[float] = None) -> Dict:
-        """Analyze both vertical leap and sprint speed"""
+    def analyze_both(self, instagram_url: str, athlete_id: int, claimed_vertical: Optional[float] = None, claimed_sprint: Optional[float] = None) -> Dict:
+        """Analyze both metrics with clips"""
         return {
-            'vertical': self.analyze_vertical(instagram_url, claimed_vertical),
-            'sprint': self.analyze_sprint(instagram_url, claimed_sprint)
+            'vertical': self.analyze_vertical(instagram_url, athlete_id, claimed_vertical),
+            'sprint': self.analyze_sprint(instagram_url, athlete_id, claimed_sprint)
         }
