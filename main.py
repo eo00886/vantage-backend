@@ -9,7 +9,7 @@ import uuid
 import shutil
 from vertical_detector import AthleticDetector
 
-app = FastAPI(title="VANTAGE Athletic Metrics API", version="2.0.0")
+app = FastAPI(title="VANTAGE Athletic Metrics API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,10 +19,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Create directories
 os.makedirs("./static/clips", exist_ok=True)
 os.makedirs("./static/uploads", exist_ok=True)
-os.makedirs("./static/thumbnails", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 detector = AthleticDetector()
@@ -51,12 +49,7 @@ class VerifyResponse(BaseModel):
 
 @app.get("/")
 def root():
-    return {
-        "message": "VANTAGE Athletic Metrics API",
-        "status": "running",
-        "version": "2.0.0",
-        "features": ["Vertical Leap Detection", "40-Yard Sprint Detection", "Video Clip Extraction", "Thumbnail Generation"]
-    }
+    return {"message": "VANTAGE Athletic Metrics API", "status": "running", "version": "1.0.0"}
 
 @app.post("/verify", response_model=VerifyResponse)
 def verify_athlete(request: VerifyRequest):
@@ -64,10 +57,8 @@ def verify_athlete(request: VerifyRequest):
         raise HTTPException(status_code=400, detail="Video source is required")
     
     result = detector.analyze_athlete(
-        request.video_source,
-        request.athlete_id,
-        request.claimed_vertical,
-        request.claimed_sprint
+        request.video_source, request.athlete_id,
+        request.claimed_vertical, request.claimed_sprint
     )
     
     v_needs = 0 if (result['vertical_inches'] and result['vertical_confidence'] >= 90) else (2 if (result['vertical_inches'] and result['vertical_confidence'] >= 70) else (3 if result['vertical_inches'] else 4))
@@ -89,26 +80,18 @@ def verify_athlete(request: VerifyRequest):
 
 @app.post("/upload-video")
 async def upload_video(file: UploadFile = File(...)):
-    """Handle direct video uploads"""
     try:
         file_id = str(uuid.uuid4())
-        file_extension = os.path.splitext(file.filename)[1]
-        if not file_extension:
-            file_extension = '.mp4'
+        file_extension = os.path.splitext(file.filename)[1] or '.mp4'
         saved_path = f"./static/uploads/{file_id}{file_extension}"
-        
         with open(saved_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
-        video_url = f"/static/uploads/{file_id}{file_extension}"
-        
-        return {"video_url": video_url, "success": True}
+        return {"video_url": f"/static/uploads/{file_id}{file_extension}", "success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 @app.get("/clip/{athlete_id}/{metric_type}")
 def get_clip(athlete_id: int, metric_type: str):
-    """Get clip URL for athlete"""
     clip_path = f"./static/clips/athlete_{athlete_id}/{metric_type}.mp4"
     if os.path.exists(clip_path):
         return {"clip_url": f"/static/clips/athlete_{athlete_id}/{metric_type}.mp4", "exists": True}
@@ -116,7 +99,7 @@ def get_clip(athlete_id: int, metric_type: str):
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "2.0.0"}
+    return {"status": "healthy", "version": "1.0.0"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
