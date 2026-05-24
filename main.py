@@ -1,13 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 import uvicorn
 import os
+import uuid
+import shutil
 from vertical_detector import AthleticDetector
 
-app = FastAPI(title="VANTAGE Athletic Metrics API", version="1.0.0")
+app = FastAPI(title="VANTAGE Athletic Metrics API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,17 +19,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files for clips and thumbnails
+# Create directories
 os.makedirs("./static/clips", exist_ok=True)
+os.makedirs("./static/uploads", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 detector = AthleticDetector()
 
-# In-memory athlete storage (replace with database in production)
-athletes_db = {}
-
-class VerifyBothRequest(BaseModel):
-    instagram_url: str
+class VerifyRequest(BaseModel):
+    video_source: str
     athlete_id: int
     athlete_name: str
     athlete_school: str
@@ -53,26 +53,19 @@ def root():
     return {
         "message": "VANTAGE Athletic Metrics API",
         "status": "running",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "sport": "Basketball (MVP)",
+        "supported_platforms": ["Instagram", "YouTube", "TikTok", "Twitter/X", "Direct URL", "File Upload", "Camera Capture"],
         "features": ["Vertical Leap Detection", "40-Yard Sprint Detection", "Video Clip Extraction", "Thumbnail Generation"]
     }
 
-@app.post("/verify-both", response_model=VerifyResponse)
-def verify_both(request: VerifyBothRequest):
-    if not request.instagram_url:
-        raise HTTPException(status_code=400, detail="Instagram URL is required")
+@app.post("/verify", response_model=VerifyResponse)
+def verify_athlete(request: VerifyRequest):
+    if not request.video_source:
+        raise HTTPException(status_code=400, detail="Video source is required")
     
-    # Store athlete info
-    athletes_db[request.athlete_id] = {
-        'name': request.athlete_name,
-        'school': request.athlete_school,
-        'position': request.athlete_position
-    }
-    
-    # Run analysis
     result = detector.analyze_both(
-        request.instagram_url,
+        request.video_source,
         request.athlete_id,
         request.claimed_vertical,
         request.claimed_sprint
@@ -98,19 +91,28 @@ def verify_both(request: VerifyBothRequest):
         error=v.get('error') or s.get('error')
     )
 
-@app.get("/athlete/{athlete_id}/clip/{metric_type}")
-def get_athlete_clip(athlete_id: int, metric_type: str):
-    """Return the highlight clip URL for an athlete's metric"""
-    clip_path = f"./static/clips/athlete_{athlete_id}/{metric_type}.mp4"
-    
-    if os.path.exists(clip_path):
-        return {"clip_url": f"/static/clips/athlete_{athlete_id}/{metric_type}.mp4", "exists": True}
-    else:
-        return {"clip_url": None, "exists": False, "message": "Clip not yet generated"}
+@app.post("/upload-video")
+async def upload_video(file: UploadFile = File(...)):
+    """Handle direct video uploads"""
+    try:
+        file_id = str(uuid.uuid4())
+        file_extension = os.path.splitext(file.filename)[1]
+        if not file_extension:
+            file_extension = '.mp4'
+        saved_path = f"./static/uploads/{file_id}{file_extension}"
+        
+        with open(saved_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        video_url = f"/static/uploads/{file_id}{file_extension}"
+        
+        return {"video_url": video_url, "success": True, "message": "Video uploaded successfully"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "1.0.0", "sport": "Basketball"}
+    return {"status": "healthy", "version": "2.0.0", "sport": "Basketball"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
