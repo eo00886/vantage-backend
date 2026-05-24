@@ -12,6 +12,7 @@ from datetime import datetime
 
 app = FastAPI(title="VANTAGE Athletic Metrics API", version="1.0.0")
 
+# Enable CORS for frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,7 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Create directories
+# Create necessary directories
 os.makedirs("./static/clips", exist_ok=True)
 os.makedirs("./static/uploads", exist_ok=True)
 os.makedirs("./static/thumbnails", exist_ok=True)
@@ -64,7 +65,7 @@ def verify_athlete(request: VerifyRequest):
     if not request.video_source:
         raise HTTPException(status_code=400, detail="Video source is required")
     
-    # Generate realistic mock data
+    # Generate realistic mock data based on claims
     if request.claimed_vertical and 20 <= request.claimed_vertical <= 60:
         vertical_inches = request.claimed_vertical + (random.random() - 0.5) * 2
         vertical_inches = round(max(20, min(60, vertical_inches)), 1)
@@ -81,21 +82,22 @@ def verify_athlete(request: VerifyRequest):
         sprint_seconds = round(random.uniform(4.2, 5.0), 2)
         sprint_confidence = 70 + int(random.random() * 20)
     
-    # Adjust confidence based on claimed vs measured
+    # Adjust confidence if claimed vs measured differ significantly
     if request.claimed_vertical and abs(vertical_inches - request.claimed_vertical) > 3:
         vertical_confidence = max(55, vertical_confidence - 15)
     
     if request.claimed_sprint and abs(sprint_seconds - request.claimed_sprint) > 0.2:
         sprint_confidence = max(55, sprint_confidence - 15)
     
-    # Determine needs_confirmations based on confidence
+    # Determine how many confirmations are needed
     vertical_needs = 0 if vertical_confidence >= 90 else (2 if vertical_confidence >= 70 else 3)
     sprint_needs = 0 if sprint_confidence >= 90 else (2 if sprint_confidence >= 70 else 3)
     
-    # Generate clip URLs (mock)
+    # Generate mock clip URLs
     clip_dir = f"/static/clips/athlete_{request.athlete_id}"
     vertical_clip_url = f"{clip_dir}/vertical.mp4" if vertical_needs == 0 else None
     sprint_clip_url = f"{clip_dir}/sprint.mp4" if sprint_needs == 0 else None
+    thumbnail_url = f"{clip_dir}/thumbnail.jpg" if vertical_needs == 0 else None
     
     return VerifyResponse(
         success=True,
@@ -107,7 +109,7 @@ def verify_athlete(request: VerifyRequest):
         sprint_needs_confirmations=sprint_needs,
         vertical_clip_url=vertical_clip_url,
         sprint_clip_url=sprint_clip_url,
-        thumbnail_url=None,
+        thumbnail_url=thumbnail_url,
         error=None
     )
 
@@ -130,9 +132,11 @@ async def upload_video(file: UploadFile = File(...)):
 
 @app.get("/clip/{athlete_id}/{metric_type}")
 def get_clip(athlete_id: int, metric_type: str):
-    """Get clip URL for athlete (mock - returns demo clip)"""
-    # Return a demo clip URL that will work with frontend
-    return {"clip_url": None, "exists": False, "message": "Clips are generated client-side for demo"}
+    """Get clip URL for athlete - returns mock data"""
+    clip_path = f"./static/clips/athlete_{athlete_id}/{metric_type}.mp4"
+    if os.path.exists(clip_path):
+        return {"clip_url": f"/static/clips/athlete_{athlete_id}/{metric_type}.mp4", "exists": True}
+    return {"clip_url": None, "exists": False, "message": "Clip not yet generated"}
 
 @app.get("/health")
 def health():
