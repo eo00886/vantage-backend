@@ -5,11 +5,13 @@ import os
 import tempfile
 import re
 import random
-from typing import Dict, Tuple, Optional
 import subprocess
+import yt_dlp
+from typing import Dict, Tuple, Optional
+from urllib.parse import urlparse
 
 class AthleticDetector:
-    """AI-powered athletic metric detection for BASKETBALL ONLY with clip extraction"""
+    """AI-powered athletic metric detection with universal video support"""
     
     RIM_HEIGHT_INCHES = 120
     BASKETBALL_FULL_COURT_FT = 94
@@ -18,9 +20,43 @@ class AthleticDetector:
     
     def __init__(self):
         pass
+    
+    def detect_platform(self, url: str) -> str:
+        """Detect which platform the video URL is from"""
+        patterns = {
+            'instagram': r'instagram\.com/(?:p|reel|tv)',
+            'youtube': r'(youtube\.com|youtu\.be)',
+            'tiktok': r'tiktok\.com',
+            'twitter': r'twitter\.com|x\.com',
+            'facebook': r'facebook\.com|fb\.watch',
+            'direct': r'\.(mp4|mov|avi|mkv|webm)$'
+        }
+        for platform, pattern in patterns.items():
+            if re.search(pattern, url, re.IGNORECASE):
+                return platform
+        return 'unknown'
+    
+    def download_video(self, url: str) -> Optional[str]:
+        """Download video from any platform"""
+        platform = self.detect_platform(url)
         
-    def download_instagram_video(self, url: str) -> Optional[str]:
-        """Download video from Instagram URL"""
+        # Handle local file path (uploaded file)
+        if os.path.exists(url):
+            return url
+        
+        if platform == 'instagram':
+            return self._download_instagram(url)
+        elif platform == 'youtube':
+            return self._download_youtube(url)
+        elif platform == 'tiktok':
+            return self._download_tiktok(url)
+        elif platform == 'direct':
+            return self._download_direct(url)
+        else:
+            return self._download_generic(url)
+    
+    def _download_instagram(self, url: str) -> Optional[str]:
+        """Download Instagram video"""
         try:
             shortcode_match = re.search(r'instagram\.com/(?:p|reel|tv)/([A-Za-z0-9_-]+)', url)
             if not shortcode_match:
@@ -44,7 +80,97 @@ class AthleticDetector:
                 return temp_path
             return None
         except Exception as e:
-            print(f"Download error: {e}")
+            print(f"Instagram download error: {e}")
+            return None
+    
+    def _download_youtube(self, url: str) -> Optional[str]:
+        """Download YouTube video"""
+        try:
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            temp_path = temp_file.name
+            temp_file.close()
+            
+            ydl_opts = {
+                'format': 'best[height<=720]',
+                'outtmpl': temp_path.replace('.mp4', ''),
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            
+            actual_path = temp_path.replace('.mp4', '.mp4')
+            if os.path.exists(actual_path):
+                return actual_path
+            return None
+        except Exception as e:
+            print(f"YouTube download error: {e}")
+            return None
+    
+    def _download_tiktok(self, url: str) -> Optional[str]:
+        """Download TikTok video"""
+        try:
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            temp_path = temp_file.name
+            temp_file.close()
+            
+            ydl_opts = {
+                'format': 'best',
+                'outtmpl': temp_path.replace('.mp4', ''),
+                'quiet': True,
+                'no_warnings': True
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            
+            return temp_path.replace('.mp4', '.mp4')
+        except Exception as e:
+            print(f"TikTok download error: {e}")
+            return None
+    
+    def _download_direct(self, url: str) -> Optional[str]:
+        """Download direct video URL"""
+        try:
+            response = requests.get(url, stream=True, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            if response.status_code == 200:
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                temp_path = temp_file.name
+                temp_file.close()
+                
+                with open(temp_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                return temp_path
+            return None
+        except Exception as e:
+            print(f"Direct download error: {e}")
+            return None
+    
+    def _download_generic(self, url: str) -> Optional[str]:
+        """Try generic download for unsupported platforms"""
+        try:
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            temp_path = temp_file.name
+            temp_file.close()
+            
+            ydl_opts = {
+                'format': 'best',
+                'outtmpl': temp_path.replace('.mp4', ''),
+                'quiet': True,
+                'no_warnings': True
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            
+            return temp_path.replace('.mp4', '.mp4')
+        except Exception as e:
+            print(f"Generic download error: {e}")
             return None
     
     def extract_frames(self, video_path: str, frame_interval: int = 3) -> tuple:
@@ -126,8 +252,6 @@ class AthleticDetector:
         lowest_idx = None
         highest = -float('inf')
         highest_idx = None
-        lowest_original = None
-        highest_original = None
         
         for pos, idx in feet_positions:
             if pos:
@@ -182,13 +306,11 @@ class AthleticDetector:
     def extract_vertical_clip(self, video_path: str, takeoff_frame_idx: int, peak_frame_idx: int, output_path: str, fps: float) -> bool:
         """Extract a 3-second clip centered on the vertical jump"""
         try:
-            # Calculate clip boundaries (1.5 seconds before takeoff, 1.5 seconds after peak)
             start_frame = max(0, takeoff_frame_idx - int(1.5 * fps))
             end_frame = peak_frame_idx + int(1.5 * fps)
             start_time = start_frame / fps
             duration = (end_frame - start_frame) / fps
             
-            # Use ffmpeg to extract clip
             cmd = [
                 'ffmpeg', '-i', video_path,
                 '-ss', str(start_time),
@@ -201,25 +323,6 @@ class AthleticDetector:
             return os.path.exists(output_path)
         except Exception as e:
             print(f"Clip extraction error: {e}")
-            return False
-    
-    def extract_sprint_clip(self, video_path: str, start_frame_idx: int, end_frame_idx: int, output_path: str, fps: float) -> bool:
-        """Extract clip of the full sprint"""
-        try:
-            start_time = start_frame_idx / fps
-            duration = (end_frame_idx - start_frame_idx) / fps
-            
-            cmd = [
-                'ffmpeg', '-i', video_path,
-                '-ss', str(start_time),
-                '-t', str(duration),
-                '-c', 'copy',
-                output_path
-            ]
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
-            return os.path.exists(output_path)
-        except Exception as e:
-            print(f"Sprint clip extraction error: {e}")
             return False
     
     def extract_thumbnail(self, video_path: str, frame_idx: int, output_path: str) -> bool:
@@ -247,7 +350,6 @@ class AthleticDetector:
         try:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             edges = cv2.Canny(gray, 50, 150)
-            
             lines = cv2.HoughLinesP(edges, 1, np.pi/180, 100, minLineLength=100, maxLineGap=20)
             
             horizontal_lines = 0
@@ -320,7 +422,7 @@ class AthleticDetector:
             player_x, conf = self.detect_player_position(frame)
             if player_x:
                 positions.append(player_x)
-                timestamps.append(i / (fps * 3))  # Adjust for frame interval
+                timestamps.append(i / (fps * 3))
                 position_indices.append(i)
         
         if len(positions) < 5:
@@ -367,7 +469,7 @@ class AthleticDetector:
         quality = 0.6
         if '/reel/' in video_url:
             quality += 0.1
-        if 'instagram.com' in video_url:
+        if 'instagram.com' in video_url or 'youtube' in video_url:
             quality += 0.05
         
         if claimed_sprint and 3.5 <= claimed_sprint <= 6.0:
@@ -391,31 +493,30 @@ class AthleticDetector:
         }
     
     # ============================================
-    # MAIN ANALYSIS METHODS WITH CLIP EXTRACTION
+    # MAIN ANALYSIS METHODS
     # ============================================
     
-    def analyze_vertical(self, instagram_url: str, athlete_id: int, claimed_vertical: Optional[float] = None) -> Dict:
-        """Analyze vertical leap and extract clip"""
+    def analyze_vertical(self, video_source: str, athlete_id: int, claimed_vertical: Optional[float] = None) -> Dict:
+        """Analyze vertical leap from any video source"""
         result = {'success': False, 'vertical_inches': None, 'confidence': 0, 'error': None, 'clip_path': None, 'thumbnail_path': None}
         
-        video_path = self.download_instagram_video(instagram_url)
+        video_path = self.download_video(video_source)
         if not video_path:
-            result['error'] = 'Failed to download Instagram video'
+            result['error'] = 'Failed to download/load video. Please check the URL or file.'
             return result
         
         try:
             frames, fps, total_frames = self.extract_frames(video_path, frame_interval=3)
             if len(frames) < 5:
-                result['error'] = 'Video too short'
+                result['error'] = 'Video too short or could not extract frames'
                 return result
             
             takeoff_frame, peak_frame, takeoff_idx, peak_idx, _ = self.find_best_vertical_frames(frames)
             
             if takeoff_frame is None or peak_frame is None:
-                result['error'] = 'Could not detect jump motion'
+                result['error'] = 'Could not detect jump motion. Make sure video shows a clear vertical jump with rim visible.'
                 return result
             
-            # Calculate vertical
             calc_result = self.calculate_vertical(takeoff_frame, peak_frame)
             if calc_result.get('error') or calc_result['vertical_inches'] is None:
                 result['error'] = calc_result.get('error', 'Could not calculate vertical')
@@ -446,16 +547,16 @@ class AthleticDetector:
             result['error'] = f'Analysis failed: {str(e)}'
             return result
         finally:
-            if os.path.exists(video_path):
+            if video_path != video_source and os.path.exists(video_path):
                 os.unlink(video_path)
     
-    def analyze_sprint(self, instagram_url: str, athlete_id: int, claimed_sprint: Optional[float] = None) -> Dict:
-        """Analyze sprint and extract clip"""
+    def analyze_sprint(self, video_source: str, athlete_id: int, claimed_sprint: Optional[float] = None) -> Dict:
+        """Analyze sprint from any video source"""
         result = {'success': False, 'sprint_seconds': None, 'confidence': 0, 'error': None, 'clip_path': None}
         
-        video_path = self.download_instagram_video(instagram_url)
+        video_path = self.download_video(video_source)
         if not video_path:
-            fallback = self.calculate_sprint_fallback(claimed_sprint, instagram_url)
+            fallback = self.calculate_sprint_fallback(claimed_sprint, video_source)
             result['success'] = True
             result['sprint_seconds'] = fallback['sprint_seconds']
             result['confidence'] = fallback['confidence']
@@ -465,24 +566,23 @@ class AthleticDetector:
         try:
             frames, fps, total_frames = self.extract_frames(video_path, frame_interval=2)
             if len(frames) < 10:
-                fallback = self.calculate_sprint_fallback(claimed_sprint, instagram_url)
+                fallback = self.calculate_sprint_fallback(claimed_sprint, video_source)
                 result['success'] = True
                 result['sprint_seconds'] = fallback['sprint_seconds']
                 result['confidence'] = fallback['confidence']
-                result['error'] = 'Video too short'
+                result['error'] = 'Video too short for accurate sprint analysis'
                 return result
             
             calc_result = self.calculate_sprint_basketball(frames, fps)
             
             if calc_result.get('error') or calc_result['sprint_seconds'] is None:
-                fallback = self.calculate_sprint_fallback(claimed_sprint, instagram_url)
+                fallback = self.calculate_sprint_fallback(claimed_sprint, video_source)
                 result['success'] = True
                 result['sprint_seconds'] = fallback['sprint_seconds']
                 result['confidence'] = fallback['confidence']
                 result['error'] = calc_result.get('error')
                 return result
             
-            # Extract clip
             clip_dir = f"./static/clips/athlete_{athlete_id}"
             os.makedirs(clip_dir, exist_ok=True)
             
@@ -498,19 +598,19 @@ class AthleticDetector:
             return result
             
         except Exception as e:
-            fallback = self.calculate_sprint_fallback(claimed_sprint, instagram_url)
+            fallback = self.calculate_sprint_fallback(claimed_sprint, video_source)
             result['success'] = True
             result['sprint_seconds'] = fallback['sprint_seconds']
             result['confidence'] = fallback['confidence']
             result['error'] = f'Analysis error: {str(e)}'
             return result
         finally:
-            if os.path.exists(video_path):
+            if video_path != video_source and os.path.exists(video_path):
                 os.unlink(video_path)
     
-    def analyze_both(self, instagram_url: str, athlete_id: int, claimed_vertical: Optional[float] = None, claimed_sprint: Optional[float] = None) -> Dict:
-        """Analyze both metrics with clips"""
+    def analyze_both(self, video_source: str, athlete_id: int, claimed_vertical: Optional[float] = None, claimed_sprint: Optional[float] = None) -> Dict:
+        """Analyze both metrics from any video source"""
         return {
-            'vertical': self.analyze_vertical(instagram_url, athlete_id, claimed_vertical),
-            'sprint': self.analyze_sprint(instagram_url, athlete_id, claimed_sprint)
+            'vertical': self.analyze_vertical(video_source, athlete_id, claimed_vertical),
+            'sprint': self.analyze_sprint(video_source, athlete_id, claimed_sprint)
         }
