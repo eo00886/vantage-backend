@@ -1,9 +1,8 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile, BackgroundTasks
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 import uvicorn
 import os
 import uuid
@@ -12,7 +11,6 @@ import json
 import random
 import re
 from datetime import datetime
-from pathlib import Path
 
 app = FastAPI(title="VANTAGE Athletic Metrics API", version="1.0.0")
 
@@ -31,7 +29,7 @@ os.makedirs("./static/uploads", exist_ok=True)
 os.makedirs("./static/thumbnails", exist_ok=True)
 os.makedirs("./data", exist_ok=True)
 
-# Mount static files for serving clips
+# Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ========== DATA MODELS ==========
@@ -68,13 +66,8 @@ class WatchlistRequest(BaseModel):
 
 # ========== ATHLETIC DETECTOR ==========
 class AthleticDetector:
-    def __init__(self):
-        pass
-    
     def analyze_athlete(self, video_source: str, athlete_id: int, claimed_vertical: Optional[float], claimed_sprint: Optional[float]) -> Dict:
-        """Analyze athlete video and generate metrics"""
-        
-        # Generate realistic metrics based on claimed values
+        # Generate realistic metrics
         if claimed_vertical and 20 <= claimed_vertical <= 60:
             vertical = round(claimed_vertical + (random.random() - 0.5) * 2, 1)
             vertical = max(20, min(60, vertical))
@@ -91,31 +84,9 @@ class AthleticDetector:
             sprint = round(random.uniform(4.2, 5.2), 2)
             sprint_confidence = random.randint(65, 92)
         
-        # Generate clip URLs (create placeholder files)
+        # Create clip directory
         clip_dir = f"./static/clips/athlete_{athlete_id}"
         os.makedirs(clip_dir, exist_ok=True)
-        
-        # Create placeholder clip files (in production, these would be actual videos)
-        vertical_clip_path = f"{clip_dir}/vertical.mp4"
-        sprint_clip_path = f"{clip_dir}/sprint.mp4"
-        thumbnail_path = f"{clip_dir}/thumbnail.jpg"
-        
-        # Create simple placeholder files
-        with open(vertical_clip_path, 'w') as f:
-            f.write(f"Vertical clip placeholder for athlete {athlete_id}")
-        with open(sprint_clip_path, 'w') as f:
-            f.write(f"Sprint clip placeholder for athlete {athlete_id}")
-        
-        # Create a simple SVG thumbnail
-        svg_content = f'''<svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">
-            <rect width="400" height="400" fill="#1e3a5f"/>
-            <circle cx="200" cy="200" r="100" fill="rgba(255,255,255,0.1)"/>
-            <text x="200" y="200" text-anchor="middle" fill="white" font-size="40" font-family="Arial">🏀</text>
-            <text x="200" y="280" text-anchor="middle" fill="#3B82F6" font-size="20">Vertical: {vertical}"</text>
-            <text x="200" y="320" text-anchor="middle" fill="#8B5CF6" font-size="20">Sprint: {sprint}s</text>
-        </svg>'''
-        with open(thumbnail_path, 'w') as f:
-            f.write(svg_content)
         
         return {
             'success': True,
@@ -133,7 +104,7 @@ class AthleticDetector:
 
 detector = AthleticDetector()
 
-# ========== DATABASE FUNCTIONS ==========
+# ========== DATABASE ==========
 DATA_FILE = "./data/database.json"
 
 def load_data() -> Dict:
@@ -146,12 +117,12 @@ def save_data(data: Dict):
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
-# Seed athletes (matching frontend exactly)
+# Seed athletes (matches your frontend)
 SEED_ATHLETES = [
     {"id": 1, "name": "Marcus Thompson", "school": "Westlake High", "position": "SG", "jerseyNum": "23", "classYear": 2025, "flagged": False, "metrics": {"vertical": {"value": 42, "status": "verified", "verifications": 5, "confidence": 96}, "sprint": {"value": 4.38, "status": "verified", "verifications": 4, "confidence": 94}}, "trustScore": 94, "confirmations": ["Coach Miller", "Sarah Chen", "David Kim", "James Wilson", "Coach Thompson"], "views": 342, "hasClip": True},
     {"id": 2, "name": "Jaylen Carter", "school": "Mater Dei", "position": "PG", "jerseyNum": "11", "classYear": 2025, "flagged": False, "metrics": {"vertical": {"value": 38, "status": "verified", "verifications": 4, "confidence": 94}, "sprint": {"value": 4.45, "status": "pending", "verifications": 1, "confidence": 72}}, "trustScore": 91, "confirmations": ["Coach Miller", "Sarah Chen", "David Kim", "James Wilson"], "views": 189, "hasClip": True},
     {"id": 3, "name": "Elijah Williams", "school": "IMG Academy", "position": "SF", "jerseyNum": "7", "classYear": 2026, "flagged": False, "metrics": {"vertical": {"value": 44, "status": "verified", "verifications": 7, "confidence": 98}, "sprint": {"value": 4.28, "status": "verified", "verifications": 6, "confidence": 96}}, "trustScore": 96, "confirmations": ["Coach Miller", "Sarah Chen", "David Kim", "James Wilson", "Coach Thompson", "Mike Ross", "Lisa Wong"], "views": 567, "hasClip": True},
-    {"id": 4, "name": "Tyler Brooks", "school": "Montverde Academy", "position": "PF", "jerseyNum": "34", "classYear": 2026, "flagged": False, "metrics": {"vertical": {"value": 35, "status": "pending", "verifications": 1, "confidence": 78}, "sprint": {"value": None, "status": None, "verifications": 0, "confidence": 0}}, "trustScore": 0, "confirmations": ["Coach Miller"], "views": 45, "hasClip": False},
+    {"id": 4, "name": "Tyler Brooks", "school": "Montverde Academy", "position": "PF", "jerseyNum": "34", "classYear": 2026, "flagged": False, "metrics": {"vertical": {"value": 35, "status": "pending", "verifications": 1, "confidence": 78}, "sprint": {"value": None, "status": None, "verifications": 0}}, "trustScore": 0, "confirmations": ["Coach Miller"], "views": 45, "hasClip": False},
     {"id": 5, "name": "Jordan Lee", "school": "Sierra Canyon", "position": "SG", "jerseyNum": "5", "classYear": 2025, "flagged": False, "metrics": {"vertical": {"value": 40, "status": "pending", "verifications": 1, "confidence": 72}, "sprint": {"value": 4.42, "status": "pending", "verifications": 0, "confidence": 68}}, "trustScore": 0, "confirmations": [], "views": 34, "hasClip": False},
     {"id": 6, "name": "Malik Henderson", "school": "Oak Hill Academy", "position": "PG", "jerseyNum": "1", "classYear": 2026, "flagged": False, "metrics": {"vertical": {"value": 37, "status": "pending", "verifications": 0, "confidence": 68}, "sprint": {"value": 4.35, "status": "pending", "verifications": 0, "confidence": 74}}, "trustScore": 0, "confirmations": [], "views": 28, "hasClip": False}
 ]
@@ -160,10 +131,6 @@ def init_database():
     data = load_data()
     if not data["athletes"]:
         for athlete in SEED_ATHLETES:
-            # Ensure clip directories exist for athletes with clips
-            if athlete.get("hasClip", True):
-                clip_dir = f"./static/clips/athlete_{athlete['id']}"
-                os.makedirs(clip_dir, exist_ok=True)
             data["athletes"][str(athlete["id"])] = athlete
     if not data["scouts"]:
         data["scouts"]["scout_001"] = {
@@ -178,7 +145,6 @@ def init_database():
         }
     save_data(data)
 
-# Initialize on startup
 @app.on_event("startup")
 async def startup_event():
     init_database()
@@ -209,24 +175,6 @@ def get_scout_profile(scout_id: str):
     if not scout:
         raise HTTPException(status_code=404, detail="Scout not found")
     return scout
-
-@app.post("/scout/create")
-def create_scout(name: str):
-    data = load_data()
-    scout_id = f"scout_{uuid.uuid4().hex[:8]}"
-    new_scout = {
-        "id": scout_id,
-        "name": name,
-        "trustScore": 85,
-        "confirmationsMade": 0,
-        "streak": 0,
-        "watchlist": [],
-        "confirmedAthleteIds": [],
-        "challengedAthleteIds": []
-    }
-    data["scouts"][scout_id] = new_scout
-    save_data(data)
-    return new_scout
 
 @app.post("/confirm")
 def confirm_athlete(request: ConfirmRequest):
@@ -266,7 +214,6 @@ def confirm_athlete(request: ConfirmRequest):
 def update_watchlist(request: WatchlistRequest):
     data = load_data()
     scout = data["scouts"].get(request.scout_id)
-    
     if not scout:
         raise HTTPException(status_code=404, detail="Scout not found")
     
@@ -298,7 +245,7 @@ def get_watchlist(scout_id: str):
 @app.post("/verify", response_model=VerifyResponse)
 def verify_athlete(request: VerifyRequest):
     if not request.video_source:
-        raise HTTPException(status_code=400, detail="Video source is required")
+        raise HTTPException(status_code=400, detail="Video source required")
     
     result = detector.analyze_athlete(
         request.video_source, request.athlete_id,
@@ -355,40 +302,17 @@ def verify_athlete(request: VerifyRequest):
 async def upload_video(file: UploadFile = File(...)):
     try:
         file_id = str(uuid.uuid4())
-        file_extension = os.path.splitext(file.filename)[1] or '.mp4'
-        saved_path = f"./static/uploads/{file_id}{file_extension}"
-        
-        with open(saved_path, "wb") as buffer:
+        ext = os.path.splitext(file.filename)[1] or '.mp4'
+        path = f"./static/uploads/{file_id}{ext}"
+        with open(path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
-        video_url = f"/static/uploads/{file_id}{file_extension}"
-        return {"video_url": video_url, "success": True}
+        return {"video_url": f"/static/uploads/{file_id}{ext}", "success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# ========== CLIP SERVING ==========
-@app.get("/clip/{athlete_id}/{metric_type}")
-def get_clip(athlete_id: int, metric_type: str):
-    clip_path = f"./static/clips/athlete_{athlete_id}/{metric_type}.mp4"
-    if os.path.exists(clip_path):
-        return FileResponse(clip_path)
-    return {"exists": False, "message": "Clip not yet generated"}
-
-@app.get("/thumbnail/{athlete_id}")
-def get_thumbnail(athlete_id: int):
-    thumb_path = f"./static/clips/athlete_{athlete_id}/thumbnail.jpg"
-    if os.path.exists(thumb_path):
-        return FileResponse(thumb_path)
-    return {"exists": False}
-
-# ========== HEALTH & ROOT ==========
 @app.get("/")
 def root():
-    return {
-        "message": "VANTAGE Athletic Metrics API",
-        "status": "running",
-        "endpoints": ["/athletes", "/verify", "/confirm", "/watchlist", "/scout/{id}", "/clip/{id}/{type}"]
-    }
+    return {"message": "VANTAGE API", "status": "running", "endpoints": ["/athletes", "/verify", "/confirm", "/watchlist", "/scout/{id}"]}
 
 @app.get("/health")
 def health():
