@@ -1,9 +1,9 @@
 import random
 import re
-from typing import Dict, Tuple, Optional
+from typing import Dict, Optional
 
 class AthleticDetector:
-    """Simplified athletic metric detector - returns realistic mock data"""
+    """Athletic metric detector - generates realistic mock data for vertical and sprint measurements"""
     
     def __init__(self):
         pass
@@ -37,17 +37,13 @@ class AthleticDetector:
         quality = self.estimate_video_quality(url)
         
         if claimed_vertical and 20 <= claimed_vertical <= 60:
-            # Start with claimed value, add realistic variation
             variation = (random.random() - 0.5) * (1 - quality) * 6
             measured = claimed_vertical + variation
             measured = round(max(20, min(60, measured)), 1)
-            
-            # Calculate confidence based on how close measured is to claimed
             difference = abs(measured - claimed_vertical)
             confidence = int(85 - (difference * 3) + (quality * 10))
             confidence = max(55, min(98, confidence))
         else:
-            # Generate random realistic vertical between 28-48 inches
             measured = round(random.uniform(28, 48), 1)
             confidence = int(65 + random.random() * 20)
         
@@ -65,7 +61,6 @@ class AthleticDetector:
             variation = (random.random() - 0.5) * (1 - quality) * 0.2
             measured = claimed_sprint + variation
             measured = round(max(3.8, min(5.8, measured)), 2)
-            
             difference = abs(measured - claimed_sprint)
             confidence = int(85 - (difference * 30) + (quality * 10))
             confidence = max(55, min(98, confidence))
@@ -87,7 +82,6 @@ class AthleticDetector:
         vertical_result = self.generate_realistic_vertical(claimed_vertical, video_source)
         sprint_result = self.generate_realistic_sprint(claimed_sprint, video_source)
         
-        # Generate mock clip URLs (frontend handles actual video generation)
         clip_dir = f"/static/clips/athlete_{athlete_id}"
         
         return {
@@ -98,8 +92,8 @@ class AthleticDetector:
             'sprint_confidence': sprint_result['confidence'],
             'vertical_needs_confirmations': vertical_result['needs_confirmations'],
             'sprint_needs_confirmations': sprint_result['needs_confirmations'],
-            'vertical_clip_url': f"{clip_dir}/vertical.mp4" if vertical_result['needs_confirmations'] == 0 else None,
-            'sprint_clip_url': f"{clip_dir}/sprint.mp4" if sprint_result['needs_confirmations'] == 0 else None,
-            'thumbnail_url': f"{clip_dir}/thumbnail.jpg" if vertical_result['needs_confirmations'] == 0 else None,
+            'vertical_clip_url': f"{clip_dir}/vertical.mp4",
+            'sprint_clip_url': f"{clip_dir}/sprint.mp4",
+            'thumbnail_url': f"{clip_dir}/thumbnail.jpg",
             'error': None
         }
